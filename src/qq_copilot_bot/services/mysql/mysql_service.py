@@ -138,6 +138,8 @@ def save_image(
 
 
 def save_llm_health(
+    *,
+    model: str,
     endpoint: str,
     healthy: bool,
     status_code: int | None = None,
