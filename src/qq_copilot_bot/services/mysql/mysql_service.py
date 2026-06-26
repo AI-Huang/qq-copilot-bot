@@ -8,7 +8,7 @@ from nonebot.log import logger
 from sqlalchemy import create_engine, select, text
 
 from qq_copilot_bot.services.db import Base, SessionLocal, engine
-from qq_copilot_bot.services.db.models import ChatMessage
+from qq_copilot_bot.services.db.models import ChatMessage, LLMHealth
 
 # Valid MySQL identifier for the database name (defensive guard before DDL).
 _VALID_DB_NAME = re.compile(r"^[A-Za-z0-9_]+$")
@@ -95,3 +95,33 @@ def load_recent_history(session_id: str, max_turns: int = 10) -> list[dict]:
     except Exception:
         logger.exception("Failed to load chat history from MySQL")
         return []
+
+
+def save_llm_health(
+    *,
+    model: str,
+    endpoint: str,
+    healthy: bool,
+    status_code: int | None = None,
+    latency_ms: int | None = None,
+    error: str | None = None,
+) -> None:
+    """Persist a single LLM health-check result.
+
+    Failures are logged and swallowed so health probing never breaks the caller.
+    """
+    try:
+        with SessionLocal() as session:
+            session.add(
+                LLMHealth(
+                    model=model,
+                    endpoint=endpoint,
+                    healthy=healthy,
+                    status_code=status_code,
+                    latency_ms=latency_ms,
+                    error=error,
+                ),
+            )
+            session.commit()
+    except Exception:
+        logger.exception("Failed to save LLM health record to MySQL")

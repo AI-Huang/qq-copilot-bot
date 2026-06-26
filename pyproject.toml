@@ -11,6 +11,7 @@ dependencies = [
     "sqlalchemy>=2.0.51",
     "pymysql>=1.2.0",
     "pydantic-settings>=2.14.2",
+    "nonebot-plugin-apscheduler>=0.5.0",
 ]
 
 [tool.nonebot]

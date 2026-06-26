@@ -1,7 +1,7 @@
 from os import environ
 from pathlib import Path
 from typing import ClassVar
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -71,3 +71,36 @@ class MySQLSettings(BaseSettings):
 
 
 mysql_settings = MySQLSettings()
+
+
+class CopilotSettings(BaseSettings):
+    """Environment-backed settings for the Copilot chat API backend."""
+
+    api_url: str = Field(
+        default="http://127.0.0.1:4141/v1/chat/completions",
+        validation_alias="COPILOT_API_URL",
+    )
+    model: str = Field(default="gpt-4o", validation_alias="COPILOT_MODEL")
+    timeout: float = Field(default=60.0, validation_alias="COPILOT_TIMEOUT")
+    max_turns: int = Field(default=10, validation_alias="COPILOT_MAX_TURNS")
+    system_prompt: str = Field(default="", validation_alias="COPILOT_SYSTEM_PROMPT")
+
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        env_file=ENV_FILE,
+        extra="ignore",
+    )
+
+    @property
+    def base_url(self) -> str:
+        """Server root of the Copilot proxy, derived from ``api_url``.
+
+        Strips the request path (e.g. ``/v1/chat/completions``) so monitoring
+        endpoints like ``/v1/models``, ``/token``, and ``/usage`` can be built.
+        """
+        parsed = urlsplit(self.api_url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return self.api_url.rstrip("/")
+
+
+copilot_settings = CopilotSettings()
