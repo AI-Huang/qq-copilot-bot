@@ -31,8 +31,9 @@ __plugin_meta__ = PluginMetadata(
     usage="自动监听消息事件，无需手动触发",
 )
 
-# Low priority and non-blocking so business plugins are not interrupted.
-_recorder = on_message(priority=99, block=False)
+# Run before business matchers (priority 1) so block=True on those never
+# prevents recording. block=False ensures this never interrupts other plugins.
+_recorder = on_message(priority=1, block=False)
 
 
 @_recorder.handle()

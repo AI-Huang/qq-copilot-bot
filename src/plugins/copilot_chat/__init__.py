@@ -7,8 +7,10 @@ API, then sending the model's reply back to the user.
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 
+import httpx
 from nonebot import on_command, on_message
 from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,
@@ -16,6 +18,7 @@ from nonebot.adapters.onebot.v11 import (
     MessageEvent,
     PrivateMessageEvent,
 )
+from nonebot.log import logger
 from nonebot.matcher import Matcher
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
@@ -53,13 +56,58 @@ def _current_model(session_id: str) -> str:
     return _session_models.get(session_id, copilot_settings.model)
 
 
-def _build_messages(session_id: str, user_text: str) -> list[dict]:
+async def _url_to_data_url(url: str) -> str | None:
+    """Download an image URL and return a base64 data URL.
+
+    Returns None on any download failure so the caller can skip the image.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, follow_redirects=True)
+            resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        b64 = base64.b64encode(resp.content).decode()
+        return f"data:{content_type};base64,{b64}"
+    except Exception:
+        logger.warning("Failed to download image for base64 encoding: {}", url)
+        return None
+
+
+async def _extract_user_content(event: MessageEvent) -> str | list:
+    """Extract user content from a message event.
+
+    Returns a plain string when the message contains only text.
+    Returns an OpenAI vision content array when the message contains images,
+    downloading each image and encoding it as a base64 data URL (external URLs
+    are not supported by the Copilot proxy).
+    """
+    text = event.get_plaintext().strip()
+    image_urls = [
+        seg.data["url"]
+        for seg in event.message
+        if seg.type == "image" and seg.data.get("url")
+    ]
+    if not image_urls:
+        return text
+    parts: list[dict] = []
+    if text:
+        parts.append({"type": "text", "text": text})
+    for url in image_urls:
+        data_url = await _url_to_data_url(url)
+        if data_url:
+            parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        else:
+            parts.append({"type": "text", "text": "[图片下载失败]"})
+    return parts if parts else text
+
+
+def _build_messages(session_id: str, user_content: str | list) -> list[dict]:
     """Assemble the API message list: system + recent history + current turn."""
     messages: list[dict] = []
     if copilot_settings.system_prompt:
         messages.append({"role": "system", "content": copilot_settings.system_prompt})
     messages.extend(load_recent_history(session_id, copilot_settings.max_turns))
-    messages.append({"role": "user", "content": user_text})
+    messages.append({"role": "user", "content": user_content})
     return messages
 
 
@@ -70,12 +118,12 @@ def _sign(reply: str, model: str) -> str:
 
 
 async def _handle_chat(matcher: Matcher, event: MessageEvent) -> None:
-    user_text = event.get_plaintext().strip()
-    if not user_text:
+    user_content = await _extract_user_content(event)
+    if not user_content:
         await matcher.finish("请在消息中附上要对话的内容~")
 
     session_id = _session_id(event)
-    messages = _build_messages(session_id, user_text)
+    messages = _build_messages(session_id, user_content)
     try:
         result = await chat_completion(messages, model=_current_model(session_id))
     except CopilotAPIError as exc:
