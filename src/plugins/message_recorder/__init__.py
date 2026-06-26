@@ -1,13 +1,15 @@
 """NoneBot plugin: record QQ messages into local MySQL.
 
 Listens to private and group message events and persists each message via the
-MySQL storage service. Outgoing messages sent by the bot account are also
-recorded via the ``on_called_api`` hook. Recording failures never block other
-plugins.
+MySQL storage service. Image attachments are downloaded asynchronously and
+their metadata is saved to the ``message_images`` table.
+Outgoing messages sent by the bot account are also recorded via the
+``on_called_api`` hook. Recording failures never block other plugins.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from nonebot import on_message
@@ -20,11 +22,12 @@ from nonebot.adapters.onebot.v11 import (
 )
 from nonebot.plugin import PluginMetadata
 
+from qq_copilot_bot.services.image.image_service import process_image_segment
 from qq_copilot_bot.services.mysql.mysql_service import save_message
 
 __plugin_meta__ = PluginMetadata(
     name="message_recorder",
-    description="将 QQ 私聊与群聊消息（含机器人发送）记录到本地 MySQL",
+    description="将 QQ 私聊与群聊消息（含图片附件、机器人发送）记录到本地 MySQL",
     usage="自动监听消息事件，无需手动触发",
 )
 
@@ -59,6 +62,23 @@ async def _(event: MessageEvent) -> None:
         sender_nickname=sender_nickname,
         raw_message=event.raw_message,
     )
+
+    # Fire-and-forget image downloads for each image segment.
+    for seg in event.message:
+        if seg.type == "image":
+            url = seg.data.get("url")
+            file_hash = seg.data.get("file", "")
+            if url and file_hash:
+                asyncio.create_task(
+                    process_image_segment(
+                        file_hash=file_hash,
+                        url=url,
+                        user_id=event.user_id,
+                        session_id=session_id,
+                        group_id=group_id,
+                        message_id=str(event.message_id),
+                    ),
+                )
 
 
 # APIs that send a message out as the bot account.

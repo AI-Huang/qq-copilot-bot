@@ -8,7 +8,7 @@ from nonebot.log import logger
 from sqlalchemy import create_engine, select, text
 
 from qq_copilot_bot.services.db import Base, SessionLocal, engine
-from qq_copilot_bot.services.db.models import ChatMessage, LLMHealth
+from qq_copilot_bot.services.db.models import ChatMessage, LLMHealth, MessageImage
 
 # Valid MySQL identifier for the database name (defensive guard before DDL).
 _VALID_DB_NAME = re.compile(r"^[A-Za-z0-9_]+$")
@@ -97,9 +97,47 @@ def load_recent_history(session_id: str, max_turns: int = 10) -> list[dict]:
         return []
 
 
-def save_llm_health(
+def save_image(
     *,
-    model: str,
+    file_hash: str,
+    user_id: int,
+    session_id: str,
+    url: str | None = None,
+    message_id: str | None = None,
+    group_id: int | None = None,
+    local_path: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    file_size: int | None = None,
+    mime_type: str | None = None,
+) -> None:
+    """Persist an image attachment record.
+
+    Failures are logged and swallowed so the bot's event flow is never broken.
+    """
+    try:
+        with SessionLocal() as session:
+            session.add(
+                MessageImage(
+                    file_hash=file_hash,
+                    user_id=user_id,
+                    session_id=session_id,
+                    url=url,
+                    message_id=message_id,
+                    group_id=group_id,
+                    local_path=local_path,
+                    width=width,
+                    height=height,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                ),
+            )
+            session.commit()
+    except Exception:
+        logger.exception("Failed to save image record to MySQL")
+
+
+def save_llm_health(
     endpoint: str,
     healthy: bool,
     status_code: int | None = None,
