@@ -1,7 +1,4 @@
 
-# Agile MVP docs (local working set)
-.agile/
-
 .env**
 !.env.example
 

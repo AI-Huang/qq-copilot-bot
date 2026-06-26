@@ -1,0 +1,3 @@
+[submodule ".agile"]
+	path = .agile
+	url = git@github.com:AI-Huang/qq-copilot-bot-agile.git
