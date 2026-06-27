@@ -166,7 +166,41 @@ def _model_ids(payload: object) -> list[str]:
     return ids
 
 
-# Explicit command entry: /models
+_HELP_TEXT = """🤖 QQ Copilot Bot 使用说明
+
+━━━━━━ 对话 ━━━━━━
+直接发消息        → 私聊直接说，群内需 @机器人
+/chat <内容>      → 显式发起对话
+/问 /ai <内容>    → 同上
+
+━━━━━━ 模型 ━━━━━━
+/models           → 查看可用模型列表
+/model            → 查看当前会话使用的模型
+/model <名称>     → 切换当前会话的模型
+
+━━━━━━ 其他 ━━━━━━
+/status           → 查看 Bot 运行状态
+/help             → 显示本帮助
+
+💡 图片消息支持 vision 模型（如 gpt-4o）
+💡 模型切换仅对当前会话生效，重启后恢复默认""".strip()
+
+
+# Explicit command entry: /help
+_help_cmd = on_command(
+    "help",
+    aliases={"帮助", "使用说明"},
+    priority=5,   # higher than chat (10) so it's never forwarded to the LLM
+    block=True,
+)
+
+
+@_help_cmd.handle()
+async def _(matcher: Matcher) -> None:
+    await matcher.finish(_HELP_TEXT)
+
+
+
 _models_cmd = on_command(
     "models",
     aliases={"模型", "模型列表"},
