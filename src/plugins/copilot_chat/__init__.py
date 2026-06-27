@@ -148,7 +148,8 @@ def _format_models(payload: object) -> str:
         owner = str(item.get("owned_by", "")).strip()
         suffix = f"（{display}·{owner}）" if display or owner else ""
         lines.append(f"• {model_id}{suffix}")
-    lines.append(f"\n当前默认：{copilot_settings.model}")
+    default = copilot_settings.model or "（未设置，请在 .env 配置 COPILOT_MODEL）"
+    lines.append(f"\n当前默认：{default}")
     return "\n".join(lines)
 
 

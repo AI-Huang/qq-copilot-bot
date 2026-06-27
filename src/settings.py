@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import ClassVar
 from urllib.parse import quote_plus, urlsplit
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Project root: src/settings.py -> repo root is two levels up.
@@ -81,6 +81,14 @@ class CopilotSettings(BaseSettings):
         validation_alias="COPILOT_API_URL",
     )
     model: str = Field(default="gpt-4o", validation_alias="COPILOT_MODEL")
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _default_model(cls, v: object) -> object:
+        """Fall back to 'gpt-4o' when COPILOT_MODEL is unset or empty."""
+        if isinstance(v, str) and not v.strip():
+            return "gpt-4o"
+        return v
     timeout: float = Field(default=60.0, validation_alias="COPILOT_TIMEOUT")
     max_turns: int = Field(default=10, validation_alias="COPILOT_MAX_TURNS")
     system_prompt: str = Field(default="", validation_alias="COPILOT_SYSTEM_PROMPT")
