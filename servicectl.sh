@@ -27,6 +27,17 @@ _read_pid() {
     [[ -f "$PID_FILE" ]] && cat "$PID_FILE" || echo ""
 }
 
+_pgid_of() {
+    ps -o pgid= -p "$1" 2>/dev/null | tr -d ' '
+}
+
+_kill_group() {
+    # Kill every process in the process group of the given PID.
+    local pgid
+    pgid=$(_pgid_of "$1")
+    [[ -n "$pgid" ]] && kill -- "-$pgid" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -44,14 +55,15 @@ cmd_start() {
     echo "[servicectl] Starting qq-copilot-bot (watch mode)..."
     cd "$SCRIPT_DIR"
 
-    # Launch watchdog loop detached; it restarts the bot on crash automatically.
-    nohup bash -c "
+    # Launch watchdog in its own session so all children share a process group.
+    # setsid ensures kill -- -<pgid> on stop takes down uv + python too.
+    setsid bash -c "
         while true; do
             uv run python bot.py ${extra_args[*]} >> \"$LOG_FILE\" 2>&1
             echo \"[servicectl] \$(date '+%Y-%m-%d %H:%M:%S') Bot exited (code \$?). Restarting in 5s...\" >> \"$LOG_FILE\"
             sleep 5
         done
-    " &
+    " >> "$LOG_FILE" 2>&1 &
     local new_pid=$!
     echo "$new_pid" > "$PID_FILE"
 
@@ -75,8 +87,8 @@ cmd_stop() {
         return 0
     fi
 
-    echo "[servicectl] Stopping (PID $pid)..."
-    kill "$pid"
+    echo "[servicectl] Stopping (PID $pid, PGID $(_pgid_of "$pid"))..."
+    _kill_group "$pid"
 
     # Wait up to 10 s for graceful shutdown
     local waited=0
@@ -86,8 +98,10 @@ cmd_stop() {
     done
 
     if _pid_running "$pid"; then
-        echo "[servicectl] Graceful shutdown timed out; sending SIGKILL..."
-        kill -9 "$pid" 2>/dev/null || true
+        echo "[servicectl] Graceful shutdown timed out; force-killing group..."
+        local pgid
+        pgid=$(_pgid_of "$pid")
+        [[ -n "$pgid" ]] && kill -9 -- "-$pgid" 2>/dev/null || true
     fi
 
     rm -f "$PID_FILE"
