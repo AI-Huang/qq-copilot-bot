@@ -112,7 +112,7 @@ _PAGE = """<!doctype html>
   .value.green { color:#3ddc84; } .value.yellow { color:#f5c542; }
   .wrap { padding:0 24px 24px; }
   canvas { width:100%; height:240px; background:#171a21; border:1px solid #222; border-radius:10px; }
-  canvas.timeline { height:72px; margin-top:8px; cursor:grab; touch-action:none; }
+  canvas.timeline { height:88px; margin-top:8px; cursor:grab; touch-action:none; }
   canvas.timeline.drag { cursor:grabbing; }
   .tl-hint { color:#666; font-size:11px; margin-top:6px; }
   table { width:100%; border-collapse:collapse; margin-top:12px; }
@@ -128,7 +128,7 @@ _PAGE = """<!doctype html>
 <div class="grid" id="cards"></div>
 <div class="wrap">
   <canvas id="chart" width="1200" height="240"></canvas>
-  <canvas id="timeline" class="timeline" width="1200" height="72"></canvas>
+  <canvas id="timeline" class="timeline" width="1200" height="88"></canvas>
   <div class="tl-hint">滚轮缩放 · 拖动平移 · 拖动两端把手缩放 · 双击复位并跟随最新</div>
 </div>
 <div class="wrap">
@@ -198,34 +198,83 @@ function applyData(hist){
 function visible(){ return HIST.filter(h=>h.t>=view.t0-1e-6 && h.t<=view.t1+1e-6); }
 function canvasX(canvas,e){ const r=canvas.getBoundingClientRect(); return (e.clientX-r.left)*(canvas.width/r.width); }
 
+function niceTicks(t0, t1){
+  // Return {ticks, intervalS} with nice human-aligned tick positions.
+  const span=t1-t0;
+  const STEPS=[60,300,600,1800,3600,7200,10800,21600,43200,86400,172800,604800];
+  const target=8;
+  let intervalS=STEPS[0];
+  for(const s of STEPS){ if(span/s<=target){ intervalS=s; break; } intervalS=s; }
+  const first=Math.ceil(t0/intervalS)*intervalS;
+  const ticks=[];
+  for(let t=first;t<=t1+1;t+=intervalS) ticks.push(t);
+  return {ticks, intervalS};
+}
+
+function fmtTick(t, intervalS){
+  const d=new Date(t*1000);
+  const M=d.getMonth()+1, D=d.getDate(), h=d.getHours(), m=d.getMinutes();
+  if(intervalS>=86400) return `${M}/${D}`;
+  if(intervalS>=3600)  return `${M}/${D} ${String(h).padStart(2,'0')}:00`;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
 function drawSeries(data,t0,t1){
   const c=document.getElementById('chart'), ctx=c.getContext('2d');
-  const W=c.width, H=c.height, P=30; ctx.clearRect(0,0,W,H);
+  const W=c.width, H=c.height, PL=52, PR=16, PT=22, PB=32;
+  ctx.clearRect(0,0,W,H);
   if(!data.length){
     ctx.fillStyle='#666'; ctx.font='13px sans-serif';
-    ctx.fillText('此时间段暂无数据',P,H/2); return;
+    ctx.fillText('此时间段暂无数据',PL,H/2); return;
   }
   const vals=data.map(h=>Math.max(h.avg,h.ema)), max=Math.max(1,...vals);
-  ctx.font='11px sans-serif';
-  ctx.strokeStyle='#2a2f3a'; ctx.lineWidth=1;
+  const span=(t1-t0)||1;
+  const xOf=t=>PL+(W-PL-PR)*(t-t0)/span;
+  const yOf=v=>PT+(H-PT-PB)*(1-v/max);
+
+  // Horizontal grid + Y labels
+  ctx.font='11px monospace';
   for(let i=0;i<=4;i++){
-    const y=P+(H-2*P)*i/4;
-    ctx.beginPath(); ctx.moveTo(P,y); ctx.lineTo(W-P,y); ctx.stroke();
-    ctx.fillStyle='#666'; ctx.fillText(Math.round(max*(1-i/4)),4,y+3);
+    const y=PT+(H-PT-PB)*i/4, val=Math.round(max*(1-i/4));
+    ctx.strokeStyle='#2a2f3a'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(PL,y); ctx.lineTo(W-PR,y); ctx.stroke();
+    ctx.fillStyle='#888'; ctx.textAlign='right';
+    ctx.fillText(String(val),PL-4,y+4);
   }
-  const span=(t1-t0)||1, xOf=t=>P+(W-2*P)*(t-t0)/span;
+  ctx.textAlign='left';
+
+  // Vertical tick lines + X labels
+  const {ticks, intervalS}=niceTicks(t0,t1);
+  ctx.font='11px monospace';
+  ticks.forEach(t=>{
+    const x=xOf(t);
+    if(x<PL||x>W-PR) return;
+    ctx.strokeStyle='#2a2f3a'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x,PT); ctx.lineTo(x,H-PB+4); ctx.stroke();
+    ctx.fillStyle='#888'; ctx.textAlign='center';
+    ctx.fillText(fmtTick(t,intervalS),x,H-PB+16);
+    // Show date on second line when interval < 1 day and it's midnight
+    if(intervalS<86400 && new Date(t*1000).getHours()===0){
+      ctx.fillStyle='#5bc0eb';
+      const d=new Date(t*1000);
+      ctx.fillText(`${d.getMonth()+1}/${d.getDate()}`,x,H-PB+28);
+    }
+  });
+  ctx.textAlign='left';
+
+  // Data lines
   function line(key,color){
     ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath();
-    data.forEach((h,i)=>{ const x=xOf(h.t), y=P+(H-2*P)*(1-h[key]/max);
+    data.forEach((h,i)=>{ const x=xOf(h.t),y=yOf(h[key]);
       i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
   }
   line('avg','#5bc0eb'); line('ema','#3ddc84');
-  ctx.fillStyle='#777';
-  ctx.textAlign='left';   ctx.fillText(fmtTime(t0),P,H-8);
-  ctx.textAlign='center'; ctx.fillText(fmtTime((t0+t1)/2),W/2,H-8);
-  ctx.textAlign='right';  ctx.fillText(fmtTime(t1),W-P,H-8); ctx.textAlign='left';
-  ctx.fillStyle='#5bc0eb'; ctx.fillText('avg',W-70,16);
-  ctx.fillStyle='#3ddc84'; ctx.fillText('ema',W-40,16);
+
+  // Legend
+  ctx.font='11px monospace';
+  ctx.fillStyle='#5bc0eb'; ctx.textAlign='right'; ctx.fillText('avg',W-PR-32,PT+14);
+  ctx.fillStyle='#3ddc84'; ctx.fillText('ema',W-PR,PT+14);
+  ctx.textAlign='left';
 }
 
 const TL_P=8;
@@ -239,10 +288,37 @@ function drawTimeline(){
   const c=document.getElementById('timeline'), ctx=c.getContext('2d');
   const W=c.width, H=c.height; ctx.clearRect(0,0,W,H);
   if(!HIST.length) return;
+  const [dmin,dmax]=dataRange();
   const max=Math.max(1,...HIST.map(h=>h.ema));
+
+  // Sparkline
   ctx.strokeStyle='#3a4150'; ctx.lineWidth=1; ctx.beginPath();
-  HIST.forEach((h,i)=>{ const x=tlXOf(h.t), y=TL_P+(H-2*TL_P)*(1-h.ema/max);
+  HIST.forEach((h,i)=>{ const x=tlXOf(h.t), y=TL_P+(H-2*TL_P-14)*(1-h.ema/max)+2;
     i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+
+  // Day boundary markers with date labels
+  const span=dmax-dmin;
+  // Show day marks if span > 3 hours, hour marks if span > 30 min
+  const markInterval = span>3*86400 ? 86400 : span>86400 ? 43200 : span>12*3600 ? 3600 : 0;
+  if(markInterval>0){
+    const first=Math.ceil(dmin/markInterval)*markInterval;
+    ctx.font='9px monospace';
+    for(let t=first;t<=dmax;t+=markInterval){
+      const x=tlXOf(t);
+      if(x<TL_P+4||x>W-TL_P-4) continue;
+      ctx.strokeStyle='rgba(90,100,120,0.6)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H-14); ctx.stroke();
+      const d=new Date(t*1000);
+      const label=markInterval>=86400
+        ? `${d.getMonth()+1}/${d.getDate()}`
+        : `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}h`;
+      ctx.fillStyle='#778'; ctx.textAlign='center';
+      ctx.fillText(label,x,H-2);
+    }
+    ctx.textAlign='left';
+  }
+
+  // Selection overlay
   const xs=tlXOf(view.t0), xe=tlXOf(view.t1);
   ctx.fillStyle='rgba(15,17,21,0.55)'; ctx.fillRect(0,0,xs,H); ctx.fillRect(xe,0,W-xe,H);
   ctx.fillStyle='rgba(91,192,235,0.12)'; ctx.fillRect(xs,0,xe-xs,H);
