@@ -52,10 +52,19 @@ def _session_id(event: MessageEvent) -> str:
 # reset to the default model (``COPILOT_MODEL``) when the bot restarts.
 _session_models: dict[str, str] = {}
 
+# Per-session on/off switch. True (enabled) by default.
+# Persists in memory only; resets to True on bot restart.
+_session_enabled: dict[str, bool] = {}
+
 
 def _current_model(session_id: str) -> str:
     """Return the session's selected model, or the configured default."""
     return _session_models.get(session_id, copilot_settings.model)
+
+
+def _is_enabled(session_id: str) -> bool:
+    """Return whether Copilot auto-reply is enabled for this session."""
+    return _session_enabled.get(session_id, True)
 
 
 # MIME types accepted by the Copilot / OpenAI vision API.
@@ -153,11 +162,14 @@ def _sign(reply: str, model: str) -> str:
 
 
 async def _handle_chat(matcher: Matcher, event: MessageEvent) -> None:
+    session_id = _session_id(event)
+    if not _is_enabled(session_id):
+        return
+
     user_content = await _extract_user_content(event)
     if not user_content:
         await matcher.finish("请在消息中附上要对话的内容~")
 
-    session_id = _session_id(event)
     messages = _build_messages(session_id, user_content)
     try:
         result = await chat_completion(messages, model=_current_model(session_id))
@@ -214,12 +226,17 @@ _HELP_TEXT = """🤖 QQ Copilot Bot 使用说明
 /model            → 查看当前会话使用的模型
 /model <名称>     → 切换当前会话的模型
 
+━━━━━━ 开关 ━━━━━━
+/copilot on       → 开启本会话自动回复
+/copilot off      → 关闭本会话自动回复
+/copilot          → 查看当前状态
+
 ━━━━━━ 其他 ━━━━━━
 /status           → 查看 Bot 运行状态
 /help             → 显示本帮助
 
 💡 图片消息支持 vision 模型（如 gpt-4o）
-💡 模型切换仅对当前会话生效，重启后恢复默认""".strip()
+💡 模型切换 / 开关仅对当前会话生效，重启后恢复默认""".strip()
 
 
 # Explicit command entry: /help
@@ -235,6 +252,35 @@ _help_cmd = on_command(
 async def _(matcher: Matcher) -> None:
     await matcher.finish(_HELP_TEXT)
 
+
+# /copilot [on|off] — enable or disable auto-reply for the current session.
+_copilot_cmd = on_command(
+    "copilot",
+    priority=5,
+    block=True,
+)
+
+
+@_copilot_cmd.handle()
+async def _(
+    matcher: Matcher,
+    event: MessageEvent,
+    args: Message = CommandArg(),
+) -> None:
+    session_id = _session_id(event)
+    arg = args.extract_plain_text().strip().lower()
+    if arg == "on":
+        _session_enabled[session_id] = True
+        await matcher.finish("✅ Copilot 已开启，开始自动回复~")
+    elif arg == "off":
+        _session_enabled[session_id] = False
+        await matcher.finish("🔕 Copilot 已关闭，不再自动回复（/copilot on 可重新开启）")
+    else:
+        status = "✅ 开启" if _is_enabled(session_id) else "🔕 关闭"
+        await matcher.finish(
+            f"当前状态：{status}\n"
+            "「/copilot on」开启  「/copilot off」关闭"
+        )
 
 
 _models_cmd = on_command(
