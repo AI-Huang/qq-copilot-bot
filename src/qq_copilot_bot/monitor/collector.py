@@ -156,6 +156,58 @@ class MessageStatsCollector:
             per_session=dict(last.per_session),
         )
 
+    # -- historical seed ------------------------------------------------------
+
+    def load_message_history(
+        self,
+        bucket_seconds: int = 60,
+    ) -> list[dict]:
+        """Reconstruct the message-rate curve from ``chat_messages.created_at``.
+
+        Buckets all stored messages by time and returns a list of
+        ``{t, instant, avg, ema, total}`` dicts (oldest first) that can seed
+        the web chart so the timeline always reaches back to the first message.
+        Returns an empty list if the table is unreadable.
+        """
+        try:
+            from sqlalchemy import text as _text
+
+            sql = _text(
+                "SELECT FLOOR(UNIX_TIMESTAMP(created_at) / :bs) * :bs AS t, "
+                "COUNT(*) AS n "
+                "FROM chat_messages "
+                "GROUP BY t "
+                "ORDER BY t ASC"
+            )
+            with self._engine.connect() as conn:
+                rows = conn.execute(sql, {"bs": bucket_seconds}).fetchall()
+
+            result: list[dict] = []
+            cumulative = 0
+            ema: float | None = None
+            alpha = 0.3
+            for row in rows:
+                t = float(row[0])
+                n = int(row[1])
+                cumulative += n
+                instant = n / bucket_seconds * 60.0  # msgs/min
+                if ema is None:
+                    ema = instant
+                else:
+                    ema = alpha * instant + (1 - alpha) * ema
+                result.append(
+                    {
+                        "t": t,
+                        "instant": round(instant, 2),
+                        "avg": round(instant, 2),
+                        "ema": round(ema, 2),
+                        "total": cumulative,
+                    }
+                )
+            return result
+        except Exception:  # history is best-effort
+            return []
+
     # -- lifecycle ------------------------------------------------------------
 
     def close(self) -> None:

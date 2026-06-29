@@ -30,9 +30,14 @@ class StatsSampler:
         interval: float = 5.0,
         window: int = 12,
         history: int = 600,
+        bucket: int = 60,
     ) -> None:
         self.interval = interval
         self.window = window
+        self.bucket = bucket
+        # Historical seed rebuilt from chat_messages.created_at — never evicted,
+        # so the chart timeline always starts from the very first message.
+        self._seed: list[dict] = []
         self._history: deque[dict] = deque(maxlen=history)
         self._latest: dict = {}
         self._lock = threading.Lock()
@@ -47,6 +52,12 @@ class StatsSampler:
 
     def _run(self) -> None:
         with MessageStatsCollector(window=self.window) as col:
+            # Seed the chart with the full message history reconstructed from
+            # chat_messages.created_at so the timeline reaches back to the
+            # very first message, not just the current session.
+            seed = col.load_message_history(bucket_seconds=self.bucket)
+            with self._lock:
+                self._seed = seed
             while not self._stop.is_set():
                 try:
                     col.poll()
@@ -71,7 +82,8 @@ class StatsSampler:
         with self._lock:
             return {
                 "stats": dict(self._latest),
-                "history": list(self._history),
+                # Seed (full history) + live tail (high-resolution recent samples)
+                "history": list(self._seed) + list(self._history),
                 "interval": self.interval,
             }
 
@@ -353,9 +365,10 @@ def run_web(
     interval: float = 5.0,
     window: int = 12,
     history: int = 600,
+    bucket: int = 60,
 ) -> None:
     """Start the Flask web dashboard. Blocks until interrupted."""
-    sampler = StatsSampler(interval=interval, window=window, history=history)
+    sampler = StatsSampler(interval=interval, window=window, history=history, bucket=bucket)
     sampler.start()
     app = create_app(sampler)
     print(f"message monitor at http://{host}:{port}  (Ctrl-C to stop)")
