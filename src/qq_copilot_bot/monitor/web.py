@@ -117,7 +117,7 @@ _PAGE = """<!doctype html>
 <div class="wrap">
   <canvas id="chart" width="1200" height="240"></canvas>
   <canvas id="timeline" class="timeline" width="1200" height="72"></canvas>
-  <div class="tl-hint">拖动时间轴可平移 / 缩放查看历史 · 拖动两端缩放 · 双击复位</div>
+  <div class="tl-hint">滚轮缩放 · 拖动平移 · 拖动两端把手缩放 · 双击复位并跟随最新</div>
 </div>
 <div class="wrap">
   <table id="sessions">
@@ -155,11 +155,25 @@ function clampView(){
   const [dmin,dmax]=dataRange();
   let span=view.t1-view.t0;
   if(!(span>0)){ view.t0=dmin; view.t1=dmax; return; }
+  span=Math.max(MIN_SPAN, span);
   const wasFull=view.follow && view.t0<=dmin+1e-6;
-  if(view.follow){ view.t1=dmax; view.t0=wasFull?dmin:dmax-span; }
-  if(view.t1>dmax) view.t1=dmax;
-  if(view.t0<dmin) view.t0=dmin;
-  if(view.t1-view.t0<MIN_SPAN) view.t1=view.t0+MIN_SPAN;
+  if(view.follow){ view.t1=dmax; view.t0=wasFull?dmin:Math.max(dmin,dmax-span); }
+  else {
+    // Maintain span while panning — shift window instead of shrinking it.
+    if(view.t1>dmax){ view.t1=dmax; view.t0=dmax-span; }
+    if(view.t0<dmin){ view.t0=dmin; view.t1=Math.min(dmax,dmin+span); }
+  }
+}
+
+function zoomView(t, factor){
+  // Zoom in/out keeping time t (epoch seconds) fixed under the cursor.
+  const [,dmax]=dataRange();
+  const ratio=(t-view.t0)/Math.max(1e-9,view.t1-view.t0);
+  const newSpan=Math.max(MIN_SPAN,(view.t1-view.t0)*factor);
+  view.t0=t-ratio*newSpan;
+  view.t1=t+(1-ratio)*newSpan;
+  view.follow=view.t1>=dmax-1e-6;
+  clampView(); render();
 }
 
 function applyData(hist){
@@ -258,6 +272,28 @@ function render(){ drawSeries(visible(),view.t0,view.t1); drawTimeline(); }
     const [dmin,dmax]=dataRange();
     view.t0=dmin; view.t1=dmax; view.follow=true; render();
   });
+  // Scroll wheel: zoom in/out centred on cursor position.
+  c.addEventListener('wheel', e=>{
+    e.preventDefault();
+    if(!HIST.length) return;
+    const [dmin,dmax]=dataRange(), span=(dmax-dmin)||1;
+    const x=canvasX(c,e);
+    const t=dmin+(x-TL_P)/(c.width-2*TL_P)*span;
+    zoomView(t, e.deltaY>0 ? 1.25 : 0.8);
+  },{passive:false});
+})();
+
+// Scroll wheel zoom on the main chart canvas.
+(function initChartWheel(){
+  const c=document.getElementById('chart');
+  c.addEventListener('wheel', e=>{
+    e.preventDefault();
+    if(!HIST.length) return;
+    const W=c.width, P=30, span=view.t1-view.t0;
+    const x=canvasX(c,e);
+    const t=view.t0+(x-P)/Math.max(1,W-2*P)*span;
+    zoomView(t, e.deltaY>0 ? 1.25 : 0.8);
+  },{passive:false});
 })();
 
 async function tick(){
