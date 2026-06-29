@@ -8,6 +8,7 @@ API, then sending the model's reply back to the user.
 from __future__ import annotations
 
 import base64
+import io
 from datetime import datetime
 
 import httpx
@@ -23,6 +24,7 @@ from nonebot.matcher import Matcher
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
+from PIL import Image as PILImage
 
 from qq_copilot_bot.services.copilot.copilot_service import (
     CopilotAPIError,
@@ -56,20 +58,53 @@ def _current_model(session_id: str) -> str:
     return _session_models.get(session_id, copilot_settings.model)
 
 
+# MIME types accepted by the Copilot / OpenAI vision API.
+_VISION_SUPPORTED_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+# Map Pillow format names to their MIME types for the supported set.
+_PILLOW_MIME: dict[str, str] = {
+    "JPEG": "image/jpeg",
+    "PNG":  "image/png",
+    "GIF":  "image/gif",
+    "WEBP": "image/webp",
+}
+
+
 async def _url_to_data_url(url: str) -> str | None:
     """Download an image URL and return a base64 data URL.
 
-    Returns None on any download failure so the caller can skip the image.
+    Uses Pillow to detect the real format regardless of the Content-Type header,
+    and converts unsupported formats (BMP, TIFF, AVIF, …) to JPEG so the
+    Copilot vision API never rejects the media type.
+
+    Returns None on any download or conversion failure.
     """
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(url, follow_redirects=True)
             resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-        b64 = base64.b64encode(resp.content).decode()
-        return f"data:{content_type};base64,{b64}"
+        data = resp.content
+
+        with PILImage.open(io.BytesIO(data)) as img:
+            pillow_fmt = (img.format or "").upper()
+            mime = _PILLOW_MIME.get(pillow_fmt)
+
+            if mime is None:
+                # Format not in the supported set — convert to JPEG.
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=85)
+                data = buf.getvalue()
+                mime = "image/jpeg"
+                logger.debug(
+                    "Converted image from {} to JPEG for vision API (url={})",
+                    pillow_fmt or "unknown",
+                    url,
+                )
+
+        b64 = base64.b64encode(data).decode()
+        return f"data:{mime};base64,{b64}"
     except Exception:
-        logger.warning("Failed to download image for base64 encoding: {}", url)
+        logger.warning("Failed to download/convert image for vision API: {}", url)
         return None
 
 
