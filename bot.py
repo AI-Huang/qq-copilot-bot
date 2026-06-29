@@ -6,62 +6,28 @@
 
 import argparse
 import os
-import sys
-from pathlib import Path
 
 
 def _resolve_environment() -> str:
-    """Resolve the runtime environment from CLI flags and .env file.
+    """Resolve the runtime environment from the ``--env`` CLI flag.
 
-    Priority: CLI flags > .env ENVIRONMENT > existing ENVIRONMENT env var > dev
-    ``--prod`` / ``--dev`` select a preset; ``--env NAME`` allows a custom
-    overlay file ``.env.NAME``.
+    ``--env prod`` loads ``.env + .env.prod``; ``--env dev`` loads ``.env +
+    .env.dev``; omitting ``--env`` loads only ``.env``.
     """
-    env_file = Path(__file__).resolve().parent / ".env"
-    env_from_file = None
-    if env_file.exists():
-        with open(env_file, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("ENVIRONMENT="):
-                    env_from_file = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
-
     parser = argparse.ArgumentParser(description="QQ Copilot Bot")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--prod",
-        action="store_true",
-        help="使用生产环境配置 (.env + .env.prod)",
-    )
-    group.add_argument(
-        "--dev",
-        action="store_true",
-        help="使用开发环境配置 (.env + .env.dev)",
-    )
     parser.add_argument(
         "--env",
         metavar="NAME",
-        help="自定义环境名，载入 .env + .env.<NAME>",
+        default="",
+        help="环境名，载入 .env + .env.<NAME>，留空仅载入 .env",
     )
     args, _ = parser.parse_known_args()
-    if args.env:
-        return args.env
-    if args.prod:
-        return "prod"
-    if args.dev:
-        return "dev"
-    if env_from_file:
-        return env_from_file
-    return os.environ.get("ENVIRONMENT", "dev")
+    return args.env
 
 
 # Resolve and export the environment before any settings/plugins are imported,
 # so both NoneBot and MySQLSettings load the matching ``.env.<environment>``.
 os.environ["ENVIRONMENT"] = _resolve_environment()
-
-# Make the ``src`` layout importable (settings, qq_copilot_bot, plugins).
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import nonebot
 from nonebot.adapters.onebot.v11 import Adapter as ONEBOT_V11Adapter

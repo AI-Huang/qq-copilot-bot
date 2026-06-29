@@ -1323,7 +1323,7 @@ wheels = [
 [[package]]
 name = "qq-copilot-bot"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "flask" },
     { name = "nonebot-adapter-onebot" },
