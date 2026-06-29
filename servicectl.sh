@@ -105,7 +105,7 @@ cmd_stop() {
     local waited=0
     while _pid_running "$pid" && (( waited < 10 )); do
         sleep 1
-        (( waited++ ))
+        (( ++waited ))
     done
 
     if _pid_running "$pid"; then
@@ -219,7 +219,7 @@ monitor_stop() {
     local waited=0
     while _pid_running "$pid" && (( waited < 10 )); do
         sleep 1
-        (( waited++ ))
+        (( ++waited ))
     done
 
     if _pid_running "$pid"; then
