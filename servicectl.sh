@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# servicectl.sh — start / stop / restart / status for qq-copilot-bot
-# Usage: ./servicectl.sh {start|stop|restart|status} [--prod|--dev|--env NAME]
+# servicectl.sh — start / stop / restart / status for qq-copilot-bot and monitor
+#
+# Bot usage:
+#   ./servicectl.sh {start|stop|restart|status|watch} [--prod|--dev|--env NAME]
+#
+# Monitor dashboard usage:
+#   ./servicectl.sh monitor {start|stop|restart|status} [--port PORT] [--host HOST]
 
 set -euo pipefail
 
@@ -12,8 +17,14 @@ PID_FILE="$SCRIPT_DIR/.bot.pid"
 LOG_FILE="$SCRIPT_DIR/data/bot.log"
 LOCK_FILE="$SCRIPT_DIR/.bot.lock"
 
-# Ensure the log directory exists
+MONITOR_PID_FILE="$SCRIPT_DIR/.monitor.pid"
+MONITOR_LOG_FILE="$SCRIPT_DIR/data/monitor.log"
+MONITOR_PORT="${MONITOR_PORT:-8787}"
+MONITOR_HOST="${MONITOR_HOST:-127.0.0.1}"
+
+# Ensure the log directories exist
 mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$MONITOR_LOG_FILE")"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -147,10 +158,108 @@ cmd_status() {
 }
 
 # ---------------------------------------------------------------------------
+# Monitor commands
+# ---------------------------------------------------------------------------
+monitor_start() {
+    local pid host port
+    pid=$(_monitor_read_pid)
+    if _pid_running "$pid"; then
+        echo "[monitor] Already running (PID $pid)."
+        return 0
+    fi
+
+    # Parse --host / --port overrides from caller args
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --port) MONITOR_PORT="$2"; shift 2 ;;
+            --host) MONITOR_HOST="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    echo "[monitor] Starting monitor dashboard on http://$MONITOR_HOST:$MONITOR_PORT ..."
+    cd "$SCRIPT_DIR"
+
+    setsid bash -c "
+        while true; do
+            uv run python scripts/monitor.py web --host \"$MONITOR_HOST\" --port \"$MONITOR_PORT\" >> \"$MONITOR_LOG_FILE\" 2>&1
+            echo \"[monitor] \$(date '+%Y-%m-%d %H:%M:%S') Monitor exited (code \$?). Restarting in 5s...\" >> \"$MONITOR_LOG_FILE\"
+            sleep 5
+        done
+    " >> "$MONITOR_LOG_FILE" 2>&1 &
+    local new_pid=$!
+    echo "$new_pid" > "$MONITOR_PID_FILE"
+
+    sleep 2
+    if _pid_running "$new_pid"; then
+        echo "[monitor] Started (PID $new_pid). Log: $MONITOR_LOG_FILE"
+    else
+        echo "[monitor] Exited immediately — check $MONITOR_LOG_FILE" >&2
+        rm -f "$MONITOR_PID_FILE"
+        return 1
+    fi
+}
+
+_monitor_read_pid() {
+    [[ -f "$MONITOR_PID_FILE" ]] && cat "$MONITOR_PID_FILE" || echo ""
+}
+
+monitor_stop() {
+    local pid
+    pid=$(_monitor_read_pid)
+    if ! _pid_running "$pid"; then
+        echo "[monitor] Not running."
+        rm -f "$MONITOR_PID_FILE"
+        return 0
+    fi
+
+    echo "[monitor] Stopping (PID $pid)..."
+    _kill_group "$pid"
+
+    local waited=0
+    while _pid_running "$pid" && (( waited < 10 )); do
+        sleep 1
+        (( waited++ ))
+    done
+
+    if _pid_running "$pid"; then
+        local pgid
+        pgid=$(_pgid_of "$pid")
+        [[ -n "$pgid" ]] && kill -9 -- "-$pgid" 2>/dev/null || true
+    fi
+
+    rm -f "$MONITOR_PID_FILE"
+    echo "[monitor] Stopped."
+}
+
+monitor_restart() {
+    monitor_stop
+    sleep 1
+    monitor_start "$@"
+}
+
+monitor_status() {
+    local pid
+    pid=$(_monitor_read_pid)
+    if [[ -z "$pid" ]]; then
+        echo "[monitor] Status: stopped (no PID file)."
+        return 1
+    fi
+    if _pid_running "$pid"; then
+        echo "[monitor] Status: running (PID $pid) — http://$MONITOR_HOST:$MONITOR_PORT"
+        return 0
+    else
+        echo "[monitor] Status: dead (stale PID $pid)."
+        rm -f "$MONITOR_PID_FILE"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 COMMAND="${1:-}"
-shift || true   # remaining args forwarded to bot.py where applicable
+shift || true   # remaining args forwarded to bot.py / monitor where applicable
 
 case "$COMMAND" in
     start)   cmd_start   "$@" ;;
@@ -158,8 +267,22 @@ case "$COMMAND" in
     restart) cmd_restart "$@" ;;
     status)  cmd_status        ;;
     watch)   cmd_watch   "$@" ;;
+    monitor)
+        SUBCMD="${1:-}"; shift || true
+        case "$SUBCMD" in
+            start)   monitor_start   "$@" ;;
+            stop)    monitor_stop          ;;
+            restart) monitor_restart "$@" ;;
+            status)  monitor_status        ;;
+            *)
+                echo "Usage: $0 monitor {start|stop|restart|status} [--port PORT] [--host HOST]" >&2
+                exit 1
+                ;;
+        esac
+        ;;
     *)
         echo "Usage: $0 {start|stop|restart|status|watch} [--prod|--dev|--env NAME]" >&2
+        echo "       $0 monitor {start|stop|restart|status} [--port PORT] [--host HOST]" >&2
         echo "       watch [DELAY_SECS] [--prod|--dev] — foreground watchdog loop" >&2
         exit 1
         ;;
